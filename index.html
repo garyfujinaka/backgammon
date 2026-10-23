@@ -21,12 +21,12 @@ svg{width:100%;height:auto;display:block;border-radius:10px;box-shadow:0 6px 24p
 #over h2{font-size:36px;margin:0 0 16px}
 label{font-size:14px}
 </style></head><body>
-<h1>Backgammon</h1>
+<h1>Backgammon <span id="ver" style="font-size:12px;opacity:.7">v3</span></h1>
 <div id="bar">
 <button id="rollBtn">Roll Dice</button><button id="undoBtn">Undo</button><button id="doneBtn">End Turn</button><button id="newBtn">New Game</button>
 <select id="level" aria-label="Opponent"><option value="easy">vs Computer: Easy</option><option value="medium">vs Computer: Medium</option><option value="hard">vs Computer: Hard</option><option value="2p">2 players (same phone)</option></select>
 </div>
-<div id="status"></div><div id="thinking" style="visibility:hidden;font-size:14px;color:#c8924a">🎲 Computer is thinking…</div>
+<div id="status"></div><button id="stuckBtn" style="min-height:32px;padding:4px 10px;font-size:13px;background:#6b4a2e;color:#f3e9dc">Stuck? Tap here</button><div id="thinking" style="visibility:hidden;font-size:14px;color:#c8924a">🎲 Computer is thinking…</div>
 <div id="wrap"><svg id="board" viewBox="0 0 960 640"></svg>
 <div id="over"><h2 id="overMsg"></h2><button id="overNew">New Game</button></div></div>
 <script id="engine">
@@ -128,7 +128,7 @@ function checkAutoPass(){clearTimeout(autoTimer);autoTimer=null;if(!human(turn)|
  autoTimer=setTimeout(()=>{autoTimer=null;if(human(turn)&&rolled&&!busy&&!moves().length)endTurn()},hist.length?2000:1800)}
 function roll(){if(arguments[0]!=='ai'&&(rolled||busy||!human(turn)))return;const a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);dice=[a,b];rem=diceList(a,b);rolled=true;hist=[];sel=null;
  const any=moves().length;
- setStatus(name(turn)+' rolled '+a+'-'+b+(any?((a===b?' (doubles: 4 moves)':'')+'. '+(human(turn)?(G.bar[turn]?'Enter from the bar first.':'Tap a checker, then tap where to move it.'):'')):' — no legal moves.'));
+ setStatus(name(turn)+' rolled '+a+'-'+b+(any?((a===b?' (doubles: 4 moves)':'')+'. '+(human(turn)?(G.bar[turn]?'Enter from the bar: tap a green point.':'Tap a checker, then tap where to move it.'):'')):' — no legal moves.'));
  render();if(human(turn)&&!any){clearTimeout(autoTimer);autoTimer=setTimeout(()=>{autoTimer=null;if(human(turn)&&rolled&&!moves().length)endTurn()},1800)}
  return any}
 function doMove(m){hist.push({G,rem:rem.slice()});G=applyMove(G,turn,m);rem.splice(rem.indexOf(m.die),1);sel=null;
@@ -154,37 +154,46 @@ function aiTurn(){aiTimer=null;if(human(turn)||winner(G)){setBusy(false);render(
    let m=seq&&seq[k]&&ms.find(x=>x.from===seq[k].from&&x.to===seq[k].to&&x.die===seq[k].die);if(!m){m=ms[0];seq=null}k++;
    doMove(m);if(winner(G))return;aiTimer=setTimeout(step,500)})()})}
 function gameOver(w){clearTimers();setBusy(false);$('overMsg').textContent=twoP()?(name(w)+' wins!'):(w==='w'?'You win! 🎉':'Computer wins');$('over').style.display='flex';setStatus('Game over.');render()}
+function srcs(ms){return [...new Set(ms.map(m=>m.from))]}
 function clickSrc(src){if(!human(turn)||!rolled||busy||winner(G))return;const ms=moves();
  if(sel!==null){const m=ms.find(m=>m.from===sel&&m.to===src);if(m){doMove(m);return}}
- if(ms.some(m=>m.from===src)){sel=(sel===src?null:src)}else{sel=null;if(ms.length)setStatus('That checker can\'t move. '+rem.length+' move(s) left: '+rem.join(', '))}render()}
+ if(ms.some(m=>m.from===src)){sel=(sel===src&&srcs(ms).length>1?null:src)}
+ else{const to=ms.filter(m=>m.to===src),fr=srcs(to);
+  if(fr.length===1){doMove(to[0]);return}
+  sel=null;if(ms.length)setStatus((G.bar[turn]?'Enter from the bar first: tap the bar, then a green point. ':'That checker can\'t move. ')+rem.length+' move(s) left: '+rem.join(', '))}render()}
 function save(){try{localStorage.setItem('bg_level',$('level').value);if(human(turn)||winner(G))localStorage.setItem('bg_game',JSON.stringify({G,turn,dice,rem,rolled}));else localStorage.setItem('bg_game',JSON.stringify({G:hist.length?hist[0].G:G,turn,dice:[],rem:[],rolled:false}))}catch(e){}}
 function render(){save();svg.innerHTML='';const PORT=innerHeight>innerWidth;svg.setAttribute('viewBox',PORT?'0 0 640 960':'0 0 960 640');ROOT=document.createElementNS(NS,'g');if(PORT)ROOT.setAttribute('transform','translate(640,0) rotate(90)');svg.appendChild(ROOT);el('rect',{x:0,y:0,width:960,height:640,fill:'#5a3a22',rx:12});
  el('rect',{x:L,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});el('rect',{x:L+PW*6+BW,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});
  el('rect',{x:L+PW*6,y:TOP,width:BW,height:600,fill:'#3d2616'});el('rect',{x:OFFX-20,y:TOP,width:70,height:600,fill:'#3d2616',rx:6});
- const ms=moves(),dest=sel!==null?ms.filter(m=>m.from===sel).map(m=>m.to):[];
- for(let i=0;i<24;i++){const x=px(i),top=i>=12;const tri=el('polygon',{points:top?`${x-PW/2},${TOP} ${x+PW/2},${TOP} ${x},${TOP+H}`:`${x-PW/2},${BOT} ${x+PW/2},${BOT} ${x},${BOT-H}`,fill:i%2?'#8c2f1b':'#2f4a5c'});
+ const ms=moves();if(human(turn)&&ms.length&&sel===null){const S=srcs(ms);if(S.length===1)sel=S[0]}if(sel!==null&&!ms.some(m=>m.from===sel))sel=null;const dest=sel!==null?ms.filter(m=>m.from===sel).map(m=>m.to):[];
+ for(let i=0;i<24;i++){const x=px(i),top=i>=12;const tri=el('polygon',{'pointer-events':'none',points:top?`${x-PW/2},${TOP} ${x+PW/2},${TOP} ${x},${TOP+H}`:`${x-PW/2},${BOT} ${x+PW/2},${BOT} ${x},${BOT-H}`,fill:i%2?'#8c2f1b':'#2f4a5c'});
   const hit=el('rect',{x:x-PW/2,y:top?TOP:BOT-300,width:PW,height:300,fill:'transparent',style:'cursor:pointer'});hit.dataset.src=i;
-  el('text',{x,y:top?13:636,fill:'#e8d3a6','font-size':11,'text-anchor':'middle'}).textContent=i+1;
+  el('text',{'pointer-events':'none',x,y:top?13:636,fill:'#e8d3a6','font-size':11,'text-anchor':'middle'}).textContent=i+1;
   if(dest.includes(i))el('polygon',{points:tri.getAttribute('points'),class:'hl'});
   const n=Math.abs(G.p[i]),c=G.p[i]>0?'w':'b';for(let k=0;k<Math.min(n,5);k++){const cy=top?TOP+27+k*52:BOT-27-k*52;chk(x,cy,c,i,sel===i&&k===Math.min(n,5)-1,k===4&&n>5?n:0)}}
- // bar
- const bx=L+PW*6+BW/2;['w','b'].forEach(c=>{const n=G.bar[c];for(let k=0;k<Math.min(n,4);k++){const cy=c==='w'?TOP+200-k*50:BOT-200+k*50;chk(bx,cy,c,'bar',c===turn&&sel==='bar'&&k===0,k===3&&n>4?n:0)}});
+ // bar (whole strip tappable)
+ const bx=L+PW*6+BW/2;{const bh=el('rect',{x:L+PW*6,y:TOP,width:BW,height:600,fill:sel==='bar'?'#4cff7a55':'transparent',style:'cursor:pointer'});bh.dataset.src='bar'}['w','b'].forEach(c=>{const n=G.bar[c];for(let k=0;k<Math.min(n,4);k++){const cy=c==='w'?TOP+200-k*50:BOT-200+k*50;chk(bx,cy,c,'bar',c===turn&&sel==='bar'&&k===0,k===3&&n>4?n:0)}});
  // off trays
- ['w','b'].forEach(c=>{const n=G.off[c];const y0=c==='w'?BOT-8:TOP+8;for(let k=0;k<n;k++)el('rect',{x:OFFX-12,y:c==='w'?y0-(k+1)*15:y0+k*15,width:54,height:12,rx:3,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:'#888'});
-  el('text',{x:OFFX+15,y:c==='w'?BOT-250:TOP+262,fill:'#e8d3a6','font-size':13,'text-anchor':'middle'}).textContent=(c==='w'?'White':'Black')+' off: '+n});
- if(dest.includes(OFF)){const r=el('rect',{x:OFFX-20,y:turn==='w'?BOT-300:TOP,width:70,height:300,class:'hl',rx:6});r.style.pointerEvents='auto';r.style.cursor='pointer';r.dataset.src=OFF}
+ ['w','b'].forEach(c=>{const n=G.off[c];const y0=c==='w'?BOT-8:TOP+8;for(let k=0;k<n;k++)el('rect',{'pointer-events':'none',x:OFFX-12,y:c==='w'?y0-(k+1)*15:y0+k*15,width:54,height:12,rx:3,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:'#888'});
+  el('text',{'pointer-events':'none',x:OFFX+15,y:c==='w'?BOT-250:TOP+262,fill:'#e8d3a6','font-size':13,'text-anchor':'middle'}).textContent=(c==='w'?'White':'Black')+' off: '+n});
+ {const r=el('rect',{x:OFFX-20,y:TOP,width:70,height:600,rx:6,fill:dest.includes(OFF)?'#4cff7a':'transparent',opacity:dest.includes(OFF)?.55:1});r.style.cursor='pointer';r.dataset.src=OFF}
  // dice
  const used=dice.length?(dice[0]===dice[1]?4-rem.length:2-rem.length):0;
  const shown=dice.length?(dice[0]===dice[1]?[dice[0],dice[0],dice[0],dice[0]]:dice):[];
  shown.forEach((d,k)=>{let isUsed;if(dice[0]===dice[1])isUsed=k<used;else isUsed=!rem.includes(d)||(rem.length===1&&d!==rem[0]);drawDie(L+PW*6+BW+PW*3-shown.length*30+k*60+5,295,d,isUsed)});
- el('text',{x:L+PW*3,y:322,fill:'#5a3a22','font-size':15,'text-anchor':'middle'}).textContent=`Pips — White ${pip(G,'w')} · Black ${pip(G,'b')}`;
+ el('text',{'pointer-events':'none',x:L+PW*3,y:322,fill:'#5a3a22','font-size':15,'text-anchor':'middle'}).textContent=`Pips — White ${pip(G,'w')} · Black ${pip(G,'b')}`;
  $('rollBtn').disabled=rolled||busy||!human(turn)||!!winner(G);$('undoBtn').disabled=!hist.length||busy;$('doneBtn').disabled=!rolled||busy||!human(turn)||ms.length>0||!!winner(G);$('doneBtn').classList.toggle('pulse',!$('doneBtn').disabled)}
 function chk(x,y,c,src,isSel,label){const g=el('circle',{cx:x,cy:y,r:25,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:c==='w'?'#999':'#666','stroke-width':2,style:'cursor:pointer'});if(isSel)g.classList.add('sel');g.dataset.src=src;
  el('circle',{cx:x,cy:y,r:16,fill:'none',stroke:c==='w'?'#ccc':'#444','pointer-events':'none'});
  if(label)el('text',{x,y:y+6,'font-size':18,'font-weight':700,'text-anchor':'middle',fill:c==='w'?'#000':'#fff','pointer-events':'none'}).textContent=label}
-function drawDie(x,y,d,used){el('rect',{x,y,width:50,height:50,rx:8,fill:used?'#bbb':'#fff',stroke:'#333',opacity:used?.5:1});
+function drawDie(x,y,d,used){el('rect',{'pointer-events':'none',x,y,width:50,height:50,rx:8,fill:used?'#bbb':'#fff',stroke:'#333',opacity:used?.5:1});
  const P={1:[[25,25]],2:[[13,13],[37,37]],3:[[13,13],[25,25],[37,37]],4:[[13,13],[37,13],[13,37],[37,37]],5:[[13,13],[37,13],[25,25],[13,37],[37,37]],6:[[13,12],[37,12],[13,25],[37,25],[13,38],[37,38]]};
- P[d].forEach(([a,b])=>el('circle',{cx:x+a,cy:y+b,r:5,fill:'#222'}))}
+ P[d].forEach(([a,b])=>el('circle',{'pointer-events':'none',cx:x+a,cy:y+b,r:5,fill:'#222'}))}
+$('stuckBtn').onclick=()=>{try{if(!G||!validState(G)){start();return}if(winner(G)){gameOver(winner(G));return}clearTimers();aiReq++;sel=null;
+ if(!human(turn)){worker=false;setBusy(true);aiTimer=setTimeout(aiTurn,100);return}setBusy(false);
+ if(!rolled){setStatus(name(turn)+': roll the dice.');render();return}
+ const ms=moves();if(!ms.length){setStatus('No moves left — passing turn.');render();setTimeout(endTurn,600);return}
+ setStatus('Fixed. '+rem.length+' move(s) left: '+rem.join(', ')+'. Green points show where you can go.');render()}catch(e){start()}};
 $('rollBtn').onclick=()=>roll();$('newBtn').onclick=()=>{if(!winner(G)&&(rolled||hist.length||G.off.w||G.off.b)&&!confirm('Start a new game?'))return;start()};$('overNew').onclick=start;$('doneBtn').onclick=()=>{if(human(turn)&&rolled&&!busy&&!moves().length)endTurn()};
 $('undoBtn').onclick=()=>{if(busy||!human(turn))return;const h=hist.pop();if(h){clearTimeout(autoTimer);autoTimer=null;G=h.G;rem=h.rem;sel=null;setStatus('Move undone. '+rem.length+' move(s) left: '+rem.join(', '));render()}};
 $('level').onchange=()=>{save();if(!human(turn)&&!busy){setBusy(true);aiTimer=setTimeout(aiTurn,500)}else if(human(turn)&&busy){clearTimers();aiReq++;setBusy(false);rolled=false;dice=[];rem=[];setStatus(name(turn)+': roll the dice.')}render()};
@@ -205,5 +214,5 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
   if(human(turn)&&g.rolled&&okDice){dice=g.dice;rem=g.rem;rolled=true;setBusy(false);setStatus(name(turn)+': '+rem.length+' move(s) left: '+rem.join(', '));render();checkAutoPass()}
   else if(human(turn)){dice=[];rem=[];rolled=false;setBusy(false);setStatus(name(turn)+': roll the dice.');render()}
   else{dice=[];rem=[];rolled=false;setBusy(true);setStatus('Computer is thinking…');render();aiTimer=setTimeout(aiTurn,600)}return}}catch(e){}start()})();
-if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js').then(r=>r.update()).catch(()=>{});const hadCtrl=!!navigator.serviceWorker.controller;let reloaded=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(reloaded||!hadCtrl)return;reloaded=true;if(!busy&&!(rolled&&hist.length))location.reload()})}
+if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(r=>{r.update();document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')r.update().catch(()=>{})})}).catch(()=>{});const hadCtrl=!!navigator.serviceWorker.controller;let reloaded=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(reloaded||!hadCtrl)return;reloaded=true;if(!busy&&!(rolled&&hist.length))location.reload()})}
 </script></body></html>
