@@ -10,6 +10,7 @@ html,body{overscroll-behavior:none}*{-webkit-tap-highlight-color:transparent;-we
 h1{margin:10px 0 4px;font-size:22px;letter-spacing:1px}
 #bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;margin:6px}
 select{font-size:16px;padding:8px;border-radius:6px;background:#f3e9dc;border:0}button{min-height:44px;background:#c8924a;border:0;color:#2b1d14;font-weight:700;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:15px}
+@keyframes pl{50%{box-shadow:0 0 0 6px #4cff7a88}}.pulse{animation:pl 1s infinite;background:#4cff7a}#bar{position:sticky;top:0;z-index:5;background:#2b1d14}
 button:disabled{opacity:.4;cursor:default}
 #status{min-height:24px;font-size:17px;margin:4px;text-align:center}
 #wrap{width:min(96vw,calc((100vh - 140px)*1.5));position:relative}@media (orientation:portrait){#wrap{width:min(98vw,calc((100vh - 190px)*0.6667))}#bar{gap:6px}button{padding:8px 11px;font-size:15px}}
@@ -25,10 +26,10 @@ label{font-size:14px}
 <button id="rollBtn">Roll Dice</button><button id="undoBtn">Undo</button><button id="doneBtn">End Turn</button><button id="newBtn">New Game</button>
 <select id="level" aria-label="Opponent"><option value="easy">vs Computer: Easy</option><option value="medium">vs Computer: Medium</option><option value="hard">vs Computer: Hard</option><option value="2p">2 players (same phone)</option></select>
 </div>
-<div id="status"></div>
+<div id="status"></div><div id="thinking" style="visibility:hidden;font-size:14px;color:#c8924a">🎲 Computer is thinking…</div>
 <div id="wrap"><svg id="board" viewBox="0 0 960 640"></svg>
 <div id="over"><h2 id="overMsg"></h2><button id="overNew">New Game</button></div></div>
-<script>
+<script id="engine">
 // ENGINE START
 // p[i] >0 white count, <0 black count. White moves 23->0 (home 0-5), black 0->23 (home 18-23).
 const OFF='off';
@@ -64,8 +65,15 @@ function sequences(s,c,dice){const out=[];let max=0;const seen=new Set();
  let res=out.filter(o=>o.seq.length===max);
  if(max===1&&dice.length===2&&dice[0]!==dice[1]){const big=Math.max(...dice);if(res.some(o=>o.seq[0].die===big))res=res.filter(o=>o.seq[0].die===big)}
  return res}
-function legalMoves(s,c,dice){const seqs=sequences(s,c,dice);const m=new Map();
- for(const o of seqs){if(!o.seq.length)continue;const f=o.seq[0];const k=f.from+'>'+f.to+'>'+f.die;if(!m.has(k))m.set(k,f)}return[...m.values()]}
+function maxDepth(s,c,rem,memo){if(!rem.length)return 0;const k=key(s)+'#'+rem.slice().sort().join('');if(memo.has(k))return memo.get(k);let best=0;const tried=new Set();
+ for(let i=0;i<rem.length&&best<rem.length;i++){const d=rem[i];if(tried.has(d))continue;tried.add(d);const rest=rem.slice(0,i).concat(rem.slice(i+1));
+  for(const m of singleMoves(s,c,d)){const v=1+maxDepth(applyMove(s,c,m),c,rest,memo);if(v>best)best=v;if(best===rem.length)break}}
+ memo.set(k,best);return best}
+function legalMoves(s,c,dice){const memo=new Map();const total=maxDepth(s,c,dice,memo);if(!total)return[];let out=[];const tried=new Set();
+ for(let i=0;i<dice.length;i++){const d=dice[i];if(tried.has(d))continue;tried.add(d);const rest=dice.slice(0,i).concat(dice.slice(i+1));
+  for(const m of singleMoves(s,c,d))if(1+maxDepth(applyMove(s,c,m),c,rest,memo)===total)out.push(m)}
+ if(total===1&&dice.length===2&&dice[0]!==dice[1]){const big=Math.max(...dice);if(out.some(m=>m.die===big))out=out.filter(m=>m.die===big)}
+ return out}
 function diceList(a,b){return a===b?[a,a,a,a]:[a,b]}
 function pip(s,c){let t=s.bar[c]*25;for(let i=0;i<24;i++)if(mine(s,c,i))t+=Math.abs(s.p[i])*(c==='w'?i+1:24-i);return t}
 function winner(s){return s.off.w===15?'w':s.off.b===15?'b':null}
@@ -84,18 +92,18 @@ function evaluate(s,c){const o=opp(c),g=sgn(c);let sc=(pip(s,o)-pip(s,c))+s.off[
 function aiChoose(s,c,dice){const seqs=sequences(s,c,dice);let best=null,bv=-1e9;for(const o of seqs){const v=evaluate(o.state,c)+Math.random()*0.01;if(v>bv){bv=v;best=o}}return best?best.seq:[]}
 function randomChoose(s,c,dice){const ss=sequences(s,c,dice);return ss.length?ss[Math.floor(Math.random()*ss.length)].seq:[]}
 const ROLLS=[];for(let a=1;a<=6;a++)for(let b=a;b<=6;b++)ROLLS.push([a,b,a===b?1:2]);
-function hardChoose(s,c,dice){const seqs=sequences(s,c,dice);if(seqs.length<=1)return seqs.length?seqs[0].seq:[];
+function hardChoose(s,c,dice,budget){const now=()=>(typeof performance!=='undefined'?performance.now():Date.now());const dl=now()+(budget||900);const seqs=sequences(s,c,dice);if(seqs.length<=1)return seqs.length?seqs[0].seq:[];
  const o=opp(c);const uniq=new Map();for(const x of seqs){const k=key(x.state);if(!uniq.has(k))uniq.set(k,x)}
  let cand=[...uniq.values()].map(x=>({x,v:evaluate(x.state,c)}));cand.sort((a,b)=>b.v-a.v);cand=cand.slice(0,10);
- let best=null,bv=-1e9;
- for(const {x} of cand){if(winner(x.state)===c)return x.seq;let tot=0;
-  for(const [a,b,w] of ROLLS){const rs=sequences(x.state,o,diceList(a,b));let ov=-1e9;
+ let best=cand[0].x,bv=-1e9;
+ for(const {x} of cand){if(winner(x.state)===c)return x.seq;if(now()>dl)break;let tot=0,cut=false;
+  for(const [a,b,w] of ROLLS){if(now()>dl){cut=true;break}const rs=sequences(x.state,o,diceList(a,b));let ov=-1e9;
    for(const r of rs){const v=winner(r.state)===o?1e6:evaluate(r.state,o);if(v>ov)ov=v}tot+=w*ov}
-  const v=-tot/36+Math.random()*0.01;if(v>bv){bv=v;best=x}}
+  if(cut)break;const v=-tot/36+Math.random()*0.01;if(v>bv){bv=v;best=x}}
  return best.seq}
-function chooseByLevel(lv,s,c,dice){return lv==='easy'?randomChoose(s,c,dice):lv==='hard'?hardChoose(s,c,dice):aiChoose(s,c,dice)}
-function validState(s){let w=s.bar.w+s.off.w,b=s.bar.b+s.off.b;for(const x of s.p){if(x>0)w+=x;else b-=x}return w===15&&b===15&&s.bar.w>=0&&s.bar.b>=0}
-if(typeof module!=='undefined')module.exports={randomChoose,hardChoose,chooseByLevel,newGame,singleMoves,applyMove,sequences,legalMoves,diceList,aiChoose,winner,validState,allHome,pip,OFF};
+function chooseByLevel(lv,s,c,dice,budget){return lv==='easy'?randomChoose(s,c,dice):lv==='hard'?hardChoose(s,c,dice,budget):aiChoose(s,c,dice)}
+function validState(s){if(!s||!Array.isArray(s.p)||s.p.length!==24||!s.bar||!s.off||s.p.some(x=>!Number.isInteger(x)))return false;let w=s.bar.w+s.off.w,b=s.bar.b+s.off.b;for(const x of s.p){if(x>0)w+=x;else b-=x}return w===15&&b===15&&s.bar.w>=0&&s.bar.b>=0}
+if(typeof module!=='undefined')module.exports={maxDepth,randomChoose,hardChoose,chooseByLevel,newGame,singleMoves,applyMove,sequences,legalMoves,diceList,aiChoose,winner,validState,allHome,pip,OFF};
 // ENGINE END
 </script>
 <script>
@@ -108,32 +116,54 @@ let ROOT;function el(t,a,p){p=p||ROOT||svg;const e=document.createElementNS(NS,t
 // geometry
 const L=40,BW=60,PW=60,TOP=20,BOT=620,H=250,OFFX=880;
 function px(i){let col=i>=12?i-12:11-i;let x=L+col*PW+(col>=6?BW:0);return x+PW/2}
-function start(){G=newGame();turn='w';dice=[];rem=[];hist=[];sel=null;rolled=false;busy=false;$('over').style.display='none';setStatus(name('w')+': roll the dice.');render();}
+let aiTimer=null,autoTimer=null,busySince=0,worker=null,aiReq=0;
+function clearTimers(){clearTimeout(aiTimer);clearTimeout(autoTimer);aiTimer=autoTimer=null}
+function setBusy(v){busy=v;busySince=v?Date.now():0;$('thinking').style.visibility=v&&!human(turn)?'visible':'hidden'}
+function start(){clearTimers();aiReq++;G=newGame();turn='w';dice=[];rem=[];hist=[];sel=null;rolled=false;setBusy(false);$('over').style.display='none';setStatus(name('w')+': roll the dice.');render();}
 function setStatus(t){$('status').textContent=t}
 function moves(){return rolled?legalMoves(G,turn,rem):[]}
-function roll(){const a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);dice=[a,b];rem=diceList(a,b);rolled=true;hist=[];sel=null;
- if(!moves().length){setStatus(name(turn)+' rolled '+a+'-'+b+' — no legal moves.');if(!human(turn)){render();setTimeout(endTurn,1200);return}}
- else setStatus(name(turn)+' rolled '+a+'-'+b+(a===b?' (doubles: 4 moves)':'')+'. '+(human(turn)?(G.bar[turn]?'You must enter from the bar first.':'Tap a checker, then tap where to move it.'):''));
- render()}
+// when the human has nothing left to play, pass automatically (Undo cancels)
+function checkAutoPass(){clearTimeout(autoTimer);autoTimer=null;if(!human(turn)||!rolled||busy||winner(G))return;if(moves().length)return;
+ const left=rem.length;setStatus((left?'No legal move for the '+(left>1?'remaining dice':rem[0])+'. ':'Turn complete. ')+(hist.length?'Passing in 2s… (tap Undo to change)':'Passing turn…'));
+ autoTimer=setTimeout(()=>{autoTimer=null;if(human(turn)&&rolled&&!busy&&!moves().length)endTurn()},hist.length?2000:1800)}
+function roll(){if(arguments[0]!=='ai'&&(rolled||busy||!human(turn)))return;const a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);dice=[a,b];rem=diceList(a,b);rolled=true;hist=[];sel=null;
+ const any=moves().length;
+ setStatus(name(turn)+' rolled '+a+'-'+b+(any?((a===b?' (doubles: 4 moves)':'')+'. '+(human(turn)?(G.bar[turn]?'Enter from the bar first.':'Tap a checker, then tap where to move it.'):'')):' — no legal moves.'));
+ render();if(human(turn)&&!any){clearTimeout(autoTimer);autoTimer=setTimeout(()=>{autoTimer=null;if(human(turn)&&rolled&&!moves().length)endTurn()},1800)}
+ return any}
 function doMove(m){hist.push({G,rem:rem.slice()});G=applyMove(G,turn,m);rem.splice(rem.indexOf(m.die),1);sel=null;
  const w=winner(G);if(w){render();gameOver(w);return}
- if(human(turn)){const ms=moves();setStatus(ms.length?(rem.length+' move(s) left: '+rem.join(', ')):'No more moves. Click End Turn (or Undo).')}
- render()}
-function endTurn(){turn=opp(turn);rolled=false;dice=[];rem=[];hist=[];sel=null;render();
- if(human(turn))setStatus(name(turn)+': roll the dice.');else{setStatus('Computer is thinking…');busy=true;setTimeout(aiTurn,700)}}
-function aiTurn(){roll();if(!rolled||winner(G))return;const seq=chooseByLevel($('level').value,G,turn,rem);if(!seq.length){busy=false;return}
- let k=0;(function step(){if(k<seq.length){doMove(seq[k++]);if(winner(G)){busy=false;return}setTimeout(step,550)}else{busy=false;setTimeout(endTurn,500)}})()}
-function gameOver(w){busy=true;$('overMsg').textContent=twoP()?(name(w)+' wins!'):(w==='w'?'You win! 🎉':'Computer wins');$('over').style.display='flex';setStatus('Game over.')}
-function clickSrc(src){if(!human(turn)||!rolled||busy)return;const ms=moves();
+ if(human(turn)){const ms=moves();if(ms.length)setStatus(rem.length+' move(s) left: '+rem.join(', '))}
+ render();if(human(turn))checkAutoPass()}
+function endTurn(){clearTimers();if(winner(G))return;turn=opp(turn);rolled=false;dice=[];rem=[];hist=[];sel=null;
+ if(human(turn)){setBusy(false);setStatus(name(turn)+': roll the dice.');render()}else{setBusy(true);setStatus('Computer is thinking…');render();aiTimer=setTimeout(aiTurn,600)}}
+function getWorker(){if(worker!==null)return worker;try{const src=document.getElementById('engine').textContent+'\nonmessage=e=>{const d=e.data;let seq=[];try{seq=chooseByLevel(d.lv,d.G,d.c,d.rem,d.budget)}catch(x){}postMessage({id:d.id,seq})}';
+ worker=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));worker.onerror=()=>{worker=false}}catch(e){worker=false}return worker}
+function computeAI(lv,cb){const id=++aiReq;const budget=900;const w=getWorker();let done=false;
+ const finish=seq=>{if(done||id!==aiReq)return;done=true;cb(seq)};
+ const fallback=()=>{if(done)return;finish(chooseByLevel(lv==='hard'?'medium':lv,G,turn,rem))};
+ if(w){const h=e=>{if(e.data.id===id){w.removeEventListener('message',h);finish(e.data.seq)}};w.addEventListener('message',h);w.postMessage({id,lv,G,c:turn,rem,budget});setTimeout(fallback,4000)}
+ else setTimeout(()=>finish(chooseByLevel(lv,G,turn,rem,budget)),30)}
+function aiTurn(){aiTimer=null;if(human(turn)||winner(G)){setBusy(false);render();return}setBusy(true);
+ if(!rolled)roll('ai');
+ if(!moves().length){aiTimer=setTimeout(endTurn,1200);return}
+ setStatus('Computer rolled '+dice.join('-')+' — thinking…');
+ computeAI($('level').value,seq=>{
+  // validate move list; fall back to a legal sequence if anything is off
+  let k=0;(function step(){if(human(turn)||winner(G))return;const ms=moves();if(!ms.length){aiTimer=setTimeout(endTurn,500);return}
+   let m=seq&&seq[k]&&ms.find(x=>x.from===seq[k].from&&x.to===seq[k].to&&x.die===seq[k].die);if(!m){m=ms[0];seq=null}k++;
+   doMove(m);if(winner(G))return;aiTimer=setTimeout(step,500)})()})}
+function gameOver(w){clearTimers();setBusy(false);$('overMsg').textContent=twoP()?(name(w)+' wins!'):(w==='w'?'You win! 🎉':'Computer wins');$('over').style.display='flex';setStatus('Game over.');render()}
+function clickSrc(src){if(!human(turn)||!rolled||busy||winner(G))return;const ms=moves();
  if(sel!==null){const m=ms.find(m=>m.from===sel&&m.to===src);if(m){doMove(m);return}}
- if(ms.some(m=>m.from===src)){sel=(sel===src?null:src)}else sel=null;render()}
-function save(){try{localStorage.setItem('bg_level',$('level').value);if(!busy||winner(G))localStorage.setItem('bg_game',JSON.stringify({G,turn,dice,rem,rolled}))}catch(e){}}
+ if(ms.some(m=>m.from===src)){sel=(sel===src?null:src)}else{sel=null;if(ms.length)setStatus('That checker can\'t move. '+rem.length+' move(s) left: '+rem.join(', '))}render()}
+function save(){try{localStorage.setItem('bg_level',$('level').value);if(human(turn)||winner(G))localStorage.setItem('bg_game',JSON.stringify({G,turn,dice,rem,rolled}));else localStorage.setItem('bg_game',JSON.stringify({G:hist.length?hist[0].G:G,turn,dice:[],rem:[],rolled:false}))}catch(e){}}
 function render(){save();svg.innerHTML='';const PORT=innerHeight>innerWidth;svg.setAttribute('viewBox',PORT?'0 0 640 960':'0 0 960 640');ROOT=document.createElementNS(NS,'g');if(PORT)ROOT.setAttribute('transform','translate(640,0) rotate(90)');svg.appendChild(ROOT);el('rect',{x:0,y:0,width:960,height:640,fill:'#5a3a22',rx:12});
  el('rect',{x:L,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});el('rect',{x:L+PW*6+BW,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});
  el('rect',{x:L+PW*6,y:TOP,width:BW,height:600,fill:'#3d2616'});el('rect',{x:OFFX-20,y:TOP,width:70,height:600,fill:'#3d2616',rx:6});
  const ms=moves(),dest=sel!==null?ms.filter(m=>m.from===sel).map(m=>m.to):[];
  for(let i=0;i<24;i++){const x=px(i),top=i>=12;const tri=el('polygon',{points:top?`${x-PW/2},${TOP} ${x+PW/2},${TOP} ${x},${TOP+H}`:`${x-PW/2},${BOT} ${x+PW/2},${BOT} ${x},${BOT-H}`,fill:i%2?'#8c2f1b':'#2f4a5c'});
-  const hit=el('rect',{x:x-PW/2,y:top?TOP:BOT-300,width:PW,height:300,fill:'transparent',style:'cursor:pointer'});hit.onclick=()=>clickSrc(i);
+  const hit=el('rect',{x:x-PW/2,y:top?TOP:BOT-300,width:PW,height:300,fill:'transparent',style:'cursor:pointer'});hit.dataset.src=i;
   el('text',{x,y:top?13:636,fill:'#e8d3a6','font-size':11,'text-anchor':'middle'}).textContent=i+1;
   if(dest.includes(i))el('polygon',{points:tri.getAttribute('points'),class:'hl'});
   const n=Math.abs(G.p[i]),c=G.p[i]>0?'w':'b';for(let k=0;k<Math.min(n,5);k++){const cy=top?TOP+27+k*52:BOT-27-k*52;chk(x,cy,c,i,sel===i&&k===Math.min(n,5)-1,k===4&&n>5?n:0)}}
@@ -142,25 +172,38 @@ function render(){save();svg.innerHTML='';const PORT=innerHeight>innerWidth;svg.
  // off trays
  ['w','b'].forEach(c=>{const n=G.off[c];const y0=c==='w'?BOT-8:TOP+8;for(let k=0;k<n;k++)el('rect',{x:OFFX-12,y:c==='w'?y0-(k+1)*15:y0+k*15,width:54,height:12,rx:3,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:'#888'});
   el('text',{x:OFFX+15,y:c==='w'?BOT-250:TOP+262,fill:'#e8d3a6','font-size':13,'text-anchor':'middle'}).textContent=(c==='w'?'White':'Black')+' off: '+n});
- if(dest.includes(OFF)){const r=el('rect',{x:OFFX-20,y:turn==='w'?BOT-300:TOP,width:70,height:300,class:'hl',rx:6});r.style.pointerEvents='auto';r.style.cursor='pointer';r.onclick=()=>clickSrc(OFF)}
+ if(dest.includes(OFF)){const r=el('rect',{x:OFFX-20,y:turn==='w'?BOT-300:TOP,width:70,height:300,class:'hl',rx:6});r.style.pointerEvents='auto';r.style.cursor='pointer';r.dataset.src=OFF}
  // dice
  const used=dice.length?(dice[0]===dice[1]?4-rem.length:2-rem.length):0;
  const shown=dice.length?(dice[0]===dice[1]?[dice[0],dice[0],dice[0],dice[0]]:dice):[];
  shown.forEach((d,k)=>{let isUsed;if(dice[0]===dice[1])isUsed=k<used;else isUsed=!rem.includes(d)||(rem.length===1&&d!==rem[0]);drawDie(L+PW*6+BW+PW*3-shown.length*30+k*60+5,295,d,isUsed)});
  el('text',{x:L+PW*3,y:322,fill:'#5a3a22','font-size':15,'text-anchor':'middle'}).textContent=`Pips — White ${pip(G,'w')} · Black ${pip(G,'b')}`;
- $('rollBtn').disabled=rolled||busy||!human(turn)||!!winner(G);$('undoBtn').disabled=!hist.length||busy;$('doneBtn').disabled=!rolled||busy||!human(turn)||ms.length>0||!!winner(G)}
-function chk(x,y,c,src,isSel,label){const g=el('circle',{cx:x,cy:y,r:25,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:c==='w'?'#999':'#666','stroke-width':2,style:'cursor:pointer'});if(isSel)g.classList.add('sel');g.onclick=e=>{e.stopPropagation();clickSrc(src)};
+ $('rollBtn').disabled=rolled||busy||!human(turn)||!!winner(G);$('undoBtn').disabled=!hist.length||busy;$('doneBtn').disabled=!rolled||busy||!human(turn)||ms.length>0||!!winner(G);$('doneBtn').classList.toggle('pulse',!$('doneBtn').disabled)}
+function chk(x,y,c,src,isSel,label){const g=el('circle',{cx:x,cy:y,r:25,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:c==='w'?'#999':'#666','stroke-width':2,style:'cursor:pointer'});if(isSel)g.classList.add('sel');g.dataset.src=src;
  el('circle',{cx:x,cy:y,r:16,fill:'none',stroke:c==='w'?'#ccc':'#444','pointer-events':'none'});
  if(label)el('text',{x,y:y+6,'font-size':18,'font-weight':700,'text-anchor':'middle',fill:c==='w'?'#000':'#fff','pointer-events':'none'}).textContent=label}
 function drawDie(x,y,d,used){el('rect',{x,y,width:50,height:50,rx:8,fill:used?'#bbb':'#fff',stroke:'#333',opacity:used?.5:1});
  const P={1:[[25,25]],2:[[13,13],[37,37]],3:[[13,13],[25,25],[37,37]],4:[[13,13],[37,13],[13,37],[37,37]],5:[[13,13],[37,13],[25,25],[13,37],[37,37]],6:[[13,12],[37,12],[13,25],[37,25],[13,38],[37,38]]};
  P[d].forEach(([a,b])=>el('circle',{cx:x+a,cy:y+b,r:5,fill:'#222'}))}
-$('rollBtn').onclick=roll;$('newBtn').onclick=start;$('overNew').onclick=start;$('doneBtn').onclick=endTurn;
-$('undoBtn').onclick=()=>{const h=hist.pop();if(h){G=h.G;rem=h.rem;sel=null;setStatus('Move undone. '+rem.length+' move(s) left.');render()}};
-$('level').onchange=()=>{save();if(!human(turn)&&!busy){busy=true;rolled=false;setTimeout(aiTurn,500)}render()};
+$('rollBtn').onclick=()=>roll();$('newBtn').onclick=()=>{if(!winner(G)&&(rolled||hist.length||G.off.w||G.off.b)&&!confirm('Start a new game?'))return;start()};$('overNew').onclick=start;$('doneBtn').onclick=()=>{if(human(turn)&&rolled&&!busy&&!moves().length)endTurn()};
+$('undoBtn').onclick=()=>{if(busy||!human(turn))return;const h=hist.pop();if(h){clearTimeout(autoTimer);autoTimer=null;G=h.G;rem=h.rem;sel=null;setStatus('Move undone. '+rem.length+' move(s) left: '+rem.join(', '));render()}};
+$('level').onchange=()=>{save();if(!human(turn)&&!busy){setBusy(true);aiTimer=setTimeout(aiTurn,500)}else if(human(turn)&&busy){clearTimers();aiReq++;setBusy(false);rolled=false;dice=[];rem=[];setStatus(name(turn)+': roll the dice.')}render()};
+// one delegated tap handler for the board (survives re-renders; pointerup avoids iOS ghost/double-tap issues)
+let lastTap=0;function boardTap(e){const t=e.target.closest&&e.target.closest('[data-src]');if(!t)return;const now=Date.now();if(now-lastTap<120)return;lastTap=now;e.preventDefault();const v=t.dataset.src;clickSrc(v==='bar'||v===OFF?v:+v)}
+if(window.PointerEvent)svg.addEventListener('pointerup',boardTap);else svg.addEventListener('click',boardTap);
+svg.addEventListener('touchend',e=>{if(e.cancelable)e.preventDefault()},{passive:false});
 addEventListener('resize',()=>render());
-(function(){try{const lv=localStorage.getItem('bg_level');if(lv)$('level').value=lv;const g=JSON.parse(localStorage.getItem('bg_game')||'null');
- if(g&&g.G&&!winner(g.G)){G=g.G;turn=g.turn;dice=g.dice;rem=g.rem;rolled=g.rolled;hist=[];sel=null;busy=false;$('over').style.display='none';
-  if(human(turn)){setStatus(rolled?(name(turn)+': '+rem.length+' move(s) left: '+rem.join(', ')):(name(turn)+': roll the dice.'));render()}else{rolled=false;render();busy=true;setStatus('Computer is thinking…');setTimeout(aiTurn,600)}return}}catch(e){}start()})();
-if('serviceWorker' in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('sw.js');
+// watchdog: never leave the game without a way forward
+setInterval(()=>{if(!G||winner(G))return;
+ if(!human(turn)){if(busy&&Date.now()-busySince>15000){clearTimers();aiReq++;setBusy(true);aiTimer=setTimeout(aiTurn,100)}else if(!busy&&!aiTimer){setBusy(true);aiTimer=setTimeout(aiTurn,100)}return}
+ if(busy){setBusy(false);render()}
+ if(rolled&&!moves().length&&!autoTimer)checkAutoPass()},2000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&G&&!human(turn)&&!winner(G)&&!aiTimer){clearTimers();aiReq++;setBusy(true);aiTimer=setTimeout(aiTurn,300)}});
+(function(){try{const lv=localStorage.getItem('bg_level');if(lv&&[...$('level').options].some(o=>o.value===lv))$('level').value=lv;const g=JSON.parse(localStorage.getItem('bg_game')||'null');
+ if(g&&validState(g.G)&&!winner(g.G)&&(g.turn==='w'||g.turn==='b')){G=g.G;turn=g.turn;hist=[];sel=null;$('over').style.display='none';
+  const okDice=Array.isArray(g.dice)&&g.dice.length===2&&g.dice.every(x=>Number.isInteger(x)&&x>=1&&x<=6)&&Array.isArray(g.rem)&&g.rem.every(x=>g.dice.includes(x))&&g.rem.length<=(g.dice[0]===g.dice[1]?4:2);
+  if(human(turn)&&g.rolled&&okDice){dice=g.dice;rem=g.rem;rolled=true;setBusy(false);setStatus(name(turn)+': '+rem.length+' move(s) left: '+rem.join(', '));render();checkAutoPass()}
+  else if(human(turn)){dice=[];rem=[];rolled=false;setBusy(false);setStatus(name(turn)+': roll the dice.');render()}
+  else{dice=[];rem=[];rolled=false;setBusy(true);setStatus('Computer is thinking…');render();aiTimer=setTimeout(aiTurn,600)}return}}catch(e){}start()})();
+if('serviceWorker' in navigator&&location.protocol.startsWith('http')){navigator.serviceWorker.register('sw.js').then(r=>r.update()).catch(()=>{});const hadCtrl=!!navigator.serviceWorker.controller;let reloaded=false;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(reloaded||!hadCtrl)return;reloaded=true;if(!busy&&!(rolled&&hist.length))location.reload()})}
 </script></body></html>
