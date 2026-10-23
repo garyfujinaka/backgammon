@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Backgammon">
+<meta name="theme-color" content="#2b1d14"><link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="icon-192.png">
+<title>Backgammon</title>
+<style>
+html,body{overscroll-behavior:none}*{-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;touch-action:manipulation}body{margin:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);box-sizing:border-box;font-family:system-ui,Segoe UI,Arial,sans-serif;background:#2b1d14;color:#f3e9dc;display:flex;flex-direction:column;align-items:center;min-height:100vh}
+h1{margin:10px 0 4px;font-size:22px;letter-spacing:1px}
+#bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;margin:6px}
+select{font-size:16px;padding:8px;border-radius:6px;background:#f3e9dc;border:0}button{min-height:44px;background:#c8924a;border:0;color:#2b1d14;font-weight:700;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:15px}
+button:disabled{opacity:.4;cursor:default}
+#status{min-height:24px;font-size:17px;margin:4px;text-align:center}
+#wrap{width:min(96vw,calc((100vh - 140px)*1.5));position:relative}@media (orientation:portrait){#wrap{width:min(98vw,calc((100vh - 190px)*0.6667))}#bar{gap:6px}button{padding:8px 11px;font-size:15px}}
+svg{width:100%;height:auto;display:block;border-radius:10px;box-shadow:0 6px 24px #0008}
+.hl{fill:#4cff7a;opacity:.55;pointer-events:none}
+.sel{stroke:#4cff7a!important;stroke-width:4!important}
+#over{position:absolute;inset:0;background:#000a;display:none;align-items:center;justify-content:center;flex-direction:column;border-radius:10px}
+#over h2{font-size:36px;margin:0 0 16px}
+label{font-size:14px}
+</style></head><body>
+<h1>Backgammon</h1>
+<div id="bar">
+<button id="rollBtn">Roll Dice</button><button id="undoBtn">Undo</button><button id="doneBtn">End Turn</button><button id="newBtn">New Game</button>
+<select id="level" aria-label="Opponent"><option value="easy">vs Computer: Easy</option><option value="medium">vs Computer: Medium</option><option value="hard">vs Computer: Hard</option><option value="2p">2 players (same phone)</option></select>
+</div>
+<div id="status"></div>
+<div id="wrap"><svg id="board" viewBox="0 0 960 640"></svg>
+<div id="over"><h2 id="overMsg"></h2><button id="overNew">New Game</button></div></div>
+<script>
+// ENGINE START
+// p[i] >0 white count, <0 black count. White moves 23->0 (home 0-5), black 0->23 (home 18-23).
+const OFF='off';
+function newGame(){const p=Array(24).fill(0);p[23]=2;p[12]=5;p[7]=3;p[5]=5;p[0]=-2;p[11]=-5;p[16]=-3;p[18]=-5;return{p,bar:{w:0,b:0},off:{w:0,b:0}}}
+function clone(s){return{p:s.p.slice(),bar:{...s.bar},off:{...s.off}}}
+const sgn=c=>c==='w'?1:-1, opp=c=>c==='w'?'b':'w';
+function mine(s,c,i){return s.p[i]*sgn(c)>0}
+function allHome(s,c){if(s.bar[c])return false;for(let i=0;i<24;i++){if(mine(s,c,i)&&(c==='w'?i>5:i<18))return false}return true}
+function openTo(s,c,i){return s.p[i]*sgn(c)>=-1}
+function singleMoves(s,c,d){const r=[];
+ if(s.bar[c]){const t=c==='w'?24-d:d-1;if(openTo(s,c,t))r.push({from:'bar',to:t,die:d});return r}
+ const home=allHome(s,c);
+ for(let i=0;i<24;i++){if(!mine(s,c,i))continue;const t=c==='w'?i-d:i+d;
+  if(t>=0&&t<24){if(openTo(s,c,t))r.push({from:i,to:t,die:d})}
+  else if(home){const exact=c==='w'?t===-1:t===24;let ok=exact;
+   if(!exact){ok=true;if(c==='w'){for(let j=i+1;j<=5;j++)if(mine(s,c,j))ok=false}else{for(let j=18;j<i;j++)if(mine(s,c,j))ok=false}}
+   if(ok)r.push({from:i,to:OFF,die:d})}}
+ return r}
+function applyMove(s,c,m){const n=clone(s),g=sgn(c);
+ if(m.from==='bar')n.bar[c]--;else n.p[m.from]-=g;
+ if(m.to===OFF)n.off[c]++;else{if(n.p[m.to]===-g){n.p[m.to]=0;n.bar[opp(c)]++}n.p[m.to]+=g}
+ return n}
+function key(s){return s.p.join(',')+'|'+s.bar.w+s.bar.b+'|'+s.off.w+','+s.off.b}
+// all maximal sequences, with larger-die rule
+function sequences(s,c,dice){const out=[];let max=0;const seen=new Set();
+ (function rec(st,rem,seq){let any=false;const tried=new Set();
+  for(let k=0;k<rem.length;k++){const d=rem[k];if(tried.has(d))continue;tried.add(d);
+   const rest=rem.slice(0,k).concat(rem.slice(k+1));
+   for(const m of singleMoves(st,c,d)){any=true;const ns=applyMove(st,c,m);const kk=key(ns)+'#'+rest.join('')+'#'+seq.length;
+    if(seen.has(kk)&&seq.length>0){/* identical continuation; still record via first path */continue}seen.add(kk);
+    rec(ns,rest,seq.concat([m]))}}
+  if(!any){max=Math.max(max,seq.length);out.push({seq,state:st})}})(s,dice,[]);
+ let res=out.filter(o=>o.seq.length===max);
+ if(max===1&&dice.length===2&&dice[0]!==dice[1]){const big=Math.max(...dice);if(res.some(o=>o.seq[0].die===big))res=res.filter(o=>o.seq[0].die===big)}
+ return res}
+function legalMoves(s,c,dice){const seqs=sequences(s,c,dice);const m=new Map();
+ for(const o of seqs){if(!o.seq.length)continue;const f=o.seq[0];const k=f.from+'>'+f.to+'>'+f.die;if(!m.has(k))m.set(k,f)}return[...m.values()]}
+function diceList(a,b){return a===b?[a,a,a,a]:[a,b]}
+function pip(s,c){let t=s.bar[c]*25;for(let i=0;i<24;i++)if(mine(s,c,i))t+=Math.abs(s.p[i])*(c==='w'?i+1:24-i);return t}
+function winner(s){return s.off.w===15?'w':s.off.b===15?'b':null}
+function evaluate(s,c){const o=opp(c),g=sgn(c);let sc=(pip(s,o)-pip(s,c))+s.off[c]*4;
+ // contact check
+ let myBack=c==='w'?-1:24,oppBack=c==='w'?24:-1;
+ for(let i=0;i<24;i++){if(mine(s,c,i)){myBack=c==='w'?Math.max(myBack,i):Math.min(myBack,i)}if(mine(s,o,i)){oppBack=c==='w'?Math.min(oppBack,i):Math.max(oppBack,i)}}
+ if(s.bar[c])myBack=c==='w'?24:-1;if(s.bar[o])oppBack=c==='w'?-1:24;
+ const contact=c==='w'?myBack>oppBack:myBack<oppBack;
+ if(!contact)return sc*2+s.off[c]*10;
+ sc+=s.bar[o]*12-s.bar[c]*12;
+ for(let i=0;i<24;i++){const n=s.p[i]*g;if(n>=2){const homeP=c==='w'?i<=5:i>=18;sc+=homeP?6:3;if(i>0&&s.p[i-1]*g>=2)sc+=2}
+  else if(n===1){let thr=s.bar[o]?3:0;for(let j=0;j<24;j++){if(!mine(s,o,j))continue;const dist=c==='w'?i-j:j-i;if(dist>0&&dist<=12)thr+=dist<=6?2:1}
+   const homeP=c==='w'?i<=5:i>=18;sc-=thr?4+thr*1.5+(homeP?0:2)*0:0;}}
+ return sc}
+function aiChoose(s,c,dice){const seqs=sequences(s,c,dice);let best=null,bv=-1e9;for(const o of seqs){const v=evaluate(o.state,c)+Math.random()*0.01;if(v>bv){bv=v;best=o}}return best?best.seq:[]}
+function randomChoose(s,c,dice){const ss=sequences(s,c,dice);return ss.length?ss[Math.floor(Math.random()*ss.length)].seq:[]}
+const ROLLS=[];for(let a=1;a<=6;a++)for(let b=a;b<=6;b++)ROLLS.push([a,b,a===b?1:2]);
+function hardChoose(s,c,dice){const seqs=sequences(s,c,dice);if(seqs.length<=1)return seqs.length?seqs[0].seq:[];
+ const o=opp(c);const uniq=new Map();for(const x of seqs){const k=key(x.state);if(!uniq.has(k))uniq.set(k,x)}
+ let cand=[...uniq.values()].map(x=>({x,v:evaluate(x.state,c)}));cand.sort((a,b)=>b.v-a.v);cand=cand.slice(0,10);
+ let best=null,bv=-1e9;
+ for(const {x} of cand){if(winner(x.state)===c)return x.seq;let tot=0;
+  for(const [a,b,w] of ROLLS){const rs=sequences(x.state,o,diceList(a,b));let ov=-1e9;
+   for(const r of rs){const v=winner(r.state)===o?1e6:evaluate(r.state,o);if(v>ov)ov=v}tot+=w*ov}
+  const v=-tot/36+Math.random()*0.01;if(v>bv){bv=v;best=x}}
+ return best.seq}
+function chooseByLevel(lv,s,c,dice){return lv==='easy'?randomChoose(s,c,dice):lv==='hard'?hardChoose(s,c,dice):aiChoose(s,c,dice)}
+function validState(s){let w=s.bar.w+s.off.w,b=s.bar.b+s.off.b;for(const x of s.p){if(x>0)w+=x;else b-=x}return w===15&&b===15&&s.bar.w>=0&&s.bar.b>=0}
+if(typeof module!=='undefined')module.exports={randomChoose,hardChoose,chooseByLevel,newGame,singleMoves,applyMove,sequences,legalMoves,diceList,aiChoose,winner,validState,allHome,pip,OFF};
+// ENGINE END
+</script>
+<script>
+const svg=document.getElementById('board'),NS='http://www.w3.org/2000/svg';
+let G,turn,dice,rem,hist,sel,rolled,busy;
+const $=id=>document.getElementById(id);
+const twoP=()=>$('level').value==='2p';const human=c=>c==='w'||twoP();
+const name=c=>twoP()?(c==='w'?'White':'Black'):(c==='w'?'You':'Computer');
+let ROOT;function el(t,a,p){p=p||ROOT||svg;const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(t==='text'&&innerHeight>innerWidth)e.setAttribute('transform',`rotate(-90 ${a.x} ${a.y})`);p.appendChild(e);return e}
+// geometry
+const L=40,BW=60,PW=60,TOP=20,BOT=620,H=250,OFFX=880;
+function px(i){let col=i>=12?i-12:11-i;let x=L+col*PW+(col>=6?BW:0);return x+PW/2}
+function start(){G=newGame();turn='w';dice=[];rem=[];hist=[];sel=null;rolled=false;busy=false;$('over').style.display='none';setStatus(name('w')+': roll the dice.');render();}
+function setStatus(t){$('status').textContent=t}
+function moves(){return rolled?legalMoves(G,turn,rem):[]}
+function roll(){const a=1+Math.floor(Math.random()*6),b=1+Math.floor(Math.random()*6);dice=[a,b];rem=diceList(a,b);rolled=true;hist=[];sel=null;
+ if(!moves().length){setStatus(name(turn)+' rolled '+a+'-'+b+' — no legal moves.');if(!human(turn)){render();setTimeout(endTurn,1200);return}}
+ else setStatus(name(turn)+' rolled '+a+'-'+b+(a===b?' (doubles: 4 moves)':'')+'. '+(human(turn)?(G.bar[turn]?'You must enter from the bar first.':'Tap a checker, then tap where to move it.'):''));
+ render()}
+function doMove(m){hist.push({G,rem:rem.slice()});G=applyMove(G,turn,m);rem.splice(rem.indexOf(m.die),1);sel=null;
+ const w=winner(G);if(w){render();gameOver(w);return}
+ if(human(turn)){const ms=moves();setStatus(ms.length?(rem.length+' move(s) left: '+rem.join(', ')):'No more moves. Click End Turn (or Undo).')}
+ render()}
+function endTurn(){turn=opp(turn);rolled=false;dice=[];rem=[];hist=[];sel=null;render();
+ if(human(turn))setStatus(name(turn)+': roll the dice.');else{setStatus('Computer is thinking…');busy=true;setTimeout(aiTurn,700)}}
+function aiTurn(){roll();if(!rolled||winner(G))return;const seq=chooseByLevel($('level').value,G,turn,rem);if(!seq.length){busy=false;return}
+ let k=0;(function step(){if(k<seq.length){doMove(seq[k++]);if(winner(G)){busy=false;return}setTimeout(step,550)}else{busy=false;setTimeout(endTurn,500)}})()}
+function gameOver(w){busy=true;$('overMsg').textContent=twoP()?(name(w)+' wins!'):(w==='w'?'You win! 🎉':'Computer wins');$('over').style.display='flex';setStatus('Game over.')}
+function clickSrc(src){if(!human(turn)||!rolled||busy)return;const ms=moves();
+ if(sel!==null){const m=ms.find(m=>m.from===sel&&m.to===src);if(m){doMove(m);return}}
+ if(ms.some(m=>m.from===src)){sel=(sel===src?null:src)}else sel=null;render()}
+function save(){try{localStorage.setItem('bg_level',$('level').value);if(!busy||winner(G))localStorage.setItem('bg_game',JSON.stringify({G,turn,dice,rem,rolled}))}catch(e){}}
+function render(){save();svg.innerHTML='';const PORT=innerHeight>innerWidth;svg.setAttribute('viewBox',PORT?'0 0 640 960':'0 0 960 640');ROOT=document.createElementNS(NS,'g');if(PORT)ROOT.setAttribute('transform','translate(640,0) rotate(90)');svg.appendChild(ROOT);el('rect',{x:0,y:0,width:960,height:640,fill:'#5a3a22',rx:12});
+ el('rect',{x:L,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});el('rect',{x:L+PW*6+BW,y:TOP,width:PW*6,height:600,fill:'#e8d3a6'});
+ el('rect',{x:L+PW*6,y:TOP,width:BW,height:600,fill:'#3d2616'});el('rect',{x:OFFX-20,y:TOP,width:70,height:600,fill:'#3d2616',rx:6});
+ const ms=moves(),dest=sel!==null?ms.filter(m=>m.from===sel).map(m=>m.to):[];
+ for(let i=0;i<24;i++){const x=px(i),top=i>=12;const tri=el('polygon',{points:top?`${x-PW/2},${TOP} ${x+PW/2},${TOP} ${x},${TOP+H}`:`${x-PW/2},${BOT} ${x+PW/2},${BOT} ${x},${BOT-H}`,fill:i%2?'#8c2f1b':'#2f4a5c'});
+  const hit=el('rect',{x:x-PW/2,y:top?TOP:BOT-300,width:PW,height:300,fill:'transparent',style:'cursor:pointer'});hit.onclick=()=>clickSrc(i);
+  el('text',{x,y:top?13:636,fill:'#e8d3a6','font-size':11,'text-anchor':'middle'}).textContent=i+1;
+  if(dest.includes(i))el('polygon',{points:tri.getAttribute('points'),class:'hl'});
+  const n=Math.abs(G.p[i]),c=G.p[i]>0?'w':'b';for(let k=0;k<Math.min(n,5);k++){const cy=top?TOP+27+k*52:BOT-27-k*52;chk(x,cy,c,i,sel===i&&k===Math.min(n,5)-1,k===4&&n>5?n:0)}}
+ // bar
+ const bx=L+PW*6+BW/2;['w','b'].forEach(c=>{const n=G.bar[c];for(let k=0;k<Math.min(n,4);k++){const cy=c==='w'?TOP+200-k*50:BOT-200+k*50;chk(bx,cy,c,'bar',c===turn&&sel==='bar'&&k===0,k===3&&n>4?n:0)}});
+ // off trays
+ ['w','b'].forEach(c=>{const n=G.off[c];const y0=c==='w'?BOT-8:TOP+8;for(let k=0;k<n;k++)el('rect',{x:OFFX-12,y:c==='w'?y0-(k+1)*15:y0+k*15,width:54,height:12,rx:3,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:'#888'});
+  el('text',{x:OFFX+15,y:c==='w'?BOT-250:TOP+262,fill:'#e8d3a6','font-size':13,'text-anchor':'middle'}).textContent=(c==='w'?'White':'Black')+' off: '+n});
+ if(dest.includes(OFF)){const r=el('rect',{x:OFFX-20,y:turn==='w'?BOT-300:TOP,width:70,height:300,class:'hl',rx:6});r.style.pointerEvents='auto';r.style.cursor='pointer';r.onclick=()=>clickSrc(OFF)}
+ // dice
+ const used=dice.length?(dice[0]===dice[1]?4-rem.length:2-rem.length):0;
+ const shown=dice.length?(dice[0]===dice[1]?[dice[0],dice[0],dice[0],dice[0]]:dice):[];
+ shown.forEach((d,k)=>{let isUsed;if(dice[0]===dice[1])isUsed=k<used;else isUsed=!rem.includes(d)||(rem.length===1&&d!==rem[0]);drawDie(L+PW*6+BW+PW*3-shown.length*30+k*60+5,295,d,isUsed)});
+ el('text',{x:L+PW*3,y:322,fill:'#5a3a22','font-size':15,'text-anchor':'middle'}).textContent=`Pips — White ${pip(G,'w')} · Black ${pip(G,'b')}`;
+ $('rollBtn').disabled=rolled||busy||!human(turn)||!!winner(G);$('undoBtn').disabled=!hist.length||busy;$('doneBtn').disabled=!rolled||busy||!human(turn)||ms.length>0||!!winner(G)}
+function chk(x,y,c,src,isSel,label){const g=el('circle',{cx:x,cy:y,r:25,fill:c==='w'?'#f7f3ea':'#1b1b1b',stroke:c==='w'?'#999':'#666','stroke-width':2,style:'cursor:pointer'});if(isSel)g.classList.add('sel');g.onclick=e=>{e.stopPropagation();clickSrc(src)};
+ el('circle',{cx:x,cy:y,r:16,fill:'none',stroke:c==='w'?'#ccc':'#444','pointer-events':'none'});
+ if(label)el('text',{x,y:y+6,'font-size':18,'font-weight':700,'text-anchor':'middle',fill:c==='w'?'#000':'#fff','pointer-events':'none'}).textContent=label}
+function drawDie(x,y,d,used){el('rect',{x,y,width:50,height:50,rx:8,fill:used?'#bbb':'#fff',stroke:'#333',opacity:used?.5:1});
+ const P={1:[[25,25]],2:[[13,13],[37,37]],3:[[13,13],[25,25],[37,37]],4:[[13,13],[37,13],[13,37],[37,37]],5:[[13,13],[37,13],[25,25],[13,37],[37,37]],6:[[13,12],[37,12],[13,25],[37,25],[13,38],[37,38]]};
+ P[d].forEach(([a,b])=>el('circle',{cx:x+a,cy:y+b,r:5,fill:'#222'}))}
+$('rollBtn').onclick=roll;$('newBtn').onclick=start;$('overNew').onclick=start;$('doneBtn').onclick=endTurn;
+$('undoBtn').onclick=()=>{const h=hist.pop();if(h){G=h.G;rem=h.rem;sel=null;setStatus('Move undone. '+rem.length+' move(s) left.');render()}};
+$('level').onchange=()=>{save();if(!human(turn)&&!busy){busy=true;rolled=false;setTimeout(aiTurn,500)}render()};
+addEventListener('resize',()=>render());
+(function(){try{const lv=localStorage.getItem('bg_level');if(lv)$('level').value=lv;const g=JSON.parse(localStorage.getItem('bg_game')||'null');
+ if(g&&g.G&&!winner(g.G)){G=g.G;turn=g.turn;dice=g.dice;rem=g.rem;rolled=g.rolled;hist=[];sel=null;busy=false;$('over').style.display='none';
+  if(human(turn)){setStatus(rolled?(name(turn)+': '+rem.length+' move(s) left: '+rem.join(', ')):(name(turn)+': roll the dice.'));render()}else{rolled=false;render();busy=true;setStatus('Computer is thinking…');setTimeout(aiTurn,600)}return}}catch(e){}start()})();
+if('serviceWorker' in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('sw.js');
+</script></body></html>
